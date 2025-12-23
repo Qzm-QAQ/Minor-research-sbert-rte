@@ -37,34 +37,44 @@ from nltk.stem import PorterStemmer
 def load_rte_tsv(path: Path):
     """
     Robust TSV loader that does NOT assume a header.
+    Handles extra TABs inside sentence fields by splitting label from the right.
     Format: index<TAB>sentence1<TAB>sentence2<TAB>label
     """
     rows = []
-    skipped = 0
+    bad = []
     with path.open("r", encoding="utf-8") as f:
-        for line in f:
+        for ln, line in enumerate(f, start=1):
             line = line.rstrip("\n")
             if not line.strip():
                 continue
-            parts = line.split("\t", 3)
-            if len(parts) != 4:
-                skipped += 1
+
+            # 先从最右边切出 label，避免句子里出现额外 tab 把 label 搞坏
+            try:
+                head, lab = line.rsplit("\t", 1)
+                idx, s1, s2 = head.split("\t", 2)
+            except ValueError:
+                bad.append((ln, line))
                 continue
-            idx, s1, s2, lab = parts
-            lab = lab.strip()
+
+            lab = lab.strip().lower()
 
             # skip header-like line safely (if exists)
-            if idx.strip().lower() == "index" or lab.lower() == "label":
+            if idx.strip().lower() == "index" or lab == "label":
                 continue
 
             if lab not in ("entailment", "not_entailment"):
-                skipped += 1
+                bad.append((ln, line))
                 continue
+
             rows.append((idx, s1, s2, lab))
 
-    if skipped:
-        print(f"[WARN] Skipped {skipped} malformed lines in {path}")
+    if bad:
+        print(f"[WARN] {path}: {len(bad)} malformed lines. Example:")
+        for ln, txt in bad[:5]:
+            print(f"  line {ln}: {txt[:120]}")
+
     return rows
+
 
 
 def y_from_label(lab: str) -> int:
@@ -156,14 +166,18 @@ KEEP_PREFIX = ("NN", "VB", "JJ", "RB")
 STEMMER = PorterStemmer()
 
 
+NEG_KEEP = {"no", "not", "n't", "never"}
+
 def preprocess_words(sentence: str):
-    # tokenization
     tokens = word_tokenize(sentence)
-    # POS tagging
     tagged = nltk.pos_tag(tokens)
-    # filter: nouns/verbs/adjectives/adverbs
-    kept = [w.lower() for (w, t) in tagged if t.startswith(KEEP_PREFIX)]
-    # stemming
+
+    kept = [
+        w.lower()
+        for (w, t) in tagged
+        if t.startswith(KEEP_PREFIX) or w.lower() in NEG_KEEP
+    ]
+
     stems = [STEMMER.stem(w) for w in kept]
     return stems
 
@@ -289,14 +303,13 @@ def main():
     train_pairs = load_rte_tsv(Path(args.train))
     test_pairs = load_rte_tsv(Path(args.test))
     assert len(train_pairs) == 2490, f"train size mismatch: {len(train_pairs)}"
-    assert len(test_pairs) == 280, f"test size mismatch: {len(test_pairs)}"
+    assert len(test_pairs) == 277, f"test size mismatch: {len(test_pairs)}"
     # dataset sanity check
     train_labels = Counter([p[3] for p in train_pairs])
     test_labels = Counter([p[3] for p in test_pairs])
     print(f"Train size: {len(train_pairs)}  label dist: {dict(train_labels)}")
     print(f"Test  size: {len(test_pairs)}  label dist: {dict(test_labels)}")
-    print(f"Train size: {len(train_pairs)}  label dist: {dict(train_labels)}")
-    print(f"Test  size: {len(test_pairs)}  label dist: {dict(test_labels)}")
+
 
     kernels = ["rbf", "linear", "poly", "sigmoid"]
     results = []
@@ -310,6 +323,7 @@ def main():
         X_train, y_train = build_sbert_pair_vectors(train_pairs, model, mode=mode)
         X_test, y_test = build_sbert_pair_vectors(test_pairs, model, mode=mode)
         for k in kernels:
+            print(f"[DEBUG] SBERT {mode}: X_train={X_train.shape} X_test={X_test.shape}")
             acc, fit_sec, pred = train_eval_svm(X_train, y_train, X_test, y_test, kernel=k)
             print(f"SBERT mode={mode:6s} kernel={k:7s} acc={acc:.4f} fit_sec={fit_sec:.2f}")
             results.append({
@@ -334,6 +348,7 @@ def main():
     ensure_nltk_resources()
     vocab, all_feat_lists = build_bow_dictionary(train_pairs, test_pairs)
     train_feats = all_feat_lists[: len(train_pairs)]
+    print(f"[DEBUG] BOW vocab size: {len(vocab)}")
     test_feats = all_feat_lists[len(train_pairs):]
     Xtr, ytr = vectorize_from_vocab(train_pairs, vocab, train_feats)
     Xte, yte = vectorize_from_vocab(test_pairs, vocab, test_feats)
