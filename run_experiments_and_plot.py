@@ -36,25 +36,34 @@ from nltk.stem import PorterStemmer
 
 def load_rte_tsv(path: Path):
     """
-    Robust TSV loader that does NOT apply CSV quote parsing.
+    Robust TSV loader that does NOT assume a header.
     Format: index<TAB>sentence1<TAB>sentence2<TAB>label
     """
     rows = []
+    skipped = 0
     with path.open("r", encoding="utf-8") as f:
-        header = f.readline()
         for line in f:
             line = line.rstrip("\n")
             if not line.strip():
                 continue
-            parts = line.split("\t", 3)  # max 4 fields
+            parts = line.split("\t", 3)
             if len(parts) != 4:
-                # skip malformed lines
+                skipped += 1
                 continue
             idx, s1, s2, lab = parts
             lab = lab.strip()
+
+            # skip header-like line safely (if exists)
+            if idx.strip().lower() == "index" or lab.lower() == "label":
+                continue
+
             if lab not in ("entailment", "not_entailment"):
+                skipped += 1
                 continue
             rows.append((idx, s1, s2, lab))
+
+    if skipped:
+        print(f"[WARN] Skipped {skipped} malformed lines in {path}")
     return rows
 
 
@@ -283,6 +292,8 @@ def main():
     # dataset sanity check
     train_labels = Counter([p[3] for p in train_pairs])
     test_labels = Counter([p[3] for p in test_pairs])
+    print(f"Train size: {len(train_pairs)}  label dist: {dict(train_labels)}")
+    print(f"Test  size: {len(test_pairs)}  label dist: {dict(test_labels)}")
     print(f"Train size: {len(train_pairs)}  label dist: {dict(train_labels)}")
     print(f"Test  size: {len(test_pairs)}  label dist: {dict(test_labels)}")
 
