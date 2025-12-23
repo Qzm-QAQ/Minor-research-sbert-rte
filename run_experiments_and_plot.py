@@ -11,7 +11,7 @@ Outputs:
 - best_confusion_matrix.png
 """
 import argparse
-import re
+
 import time
 from collections import Counter
 from pathlib import Path
@@ -288,7 +288,8 @@ def main():
 
     train_pairs = load_rte_tsv(Path(args.train))
     test_pairs = load_rte_tsv(Path(args.test))
-
+    assert len(train_pairs) == 2490, f"train size mismatch: {len(train_pairs)}"
+    assert len(test_pairs) == 280, f"test size mismatch: {len(test_pairs)}"
     # dataset sanity check
     train_labels = Counter([p[3] for p in train_pairs])
     test_labels = Counter([p[3] for p in test_pairs])
